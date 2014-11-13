@@ -5,7 +5,7 @@
 #include <Vector.h>
 #include <Pair.h>
 
-#define DEBUG_DRIVE       1
+#define DEBUG_DRIVE       0
 #define DEBUG_MOTOR_STATE 0
 #define DEBUG_SUBSCRIBER  0
 #define DEBUG_PUBLISH     0
@@ -68,7 +68,8 @@
 //*                       GLOBAL TYPEDEFS AND ALIASES
 //************************************************************************
 
-typedef unsigned long Time;
+typedef unsigned long Time;     //used in Time calculations
+typedef long Count;				//used in motor encoding
 
 //************************************************************************
 //*                       GLOBAL CONSTANTS
@@ -76,9 +77,20 @@ typedef unsigned long Time;
 namespace gw {
 
 // I2C interface control variable. 
-// Only call Wire.begin() from gw components if this is false.
-// When you call Wire.begin() then set 'gw::wire_begun = true;'
+// Always check the status of this variable BEFORE calling Wire.begin().
+// Code in the .begin() method of your Glow Worm blocks that require I2C
+// should look something like this:
+//		if(!gw::wire_begun) {
+//			Wire.begin();
+//			gw::wire_begun = true;
+//		}
+
 static bool wire_begun = false;
+
+//Uncomment to keep track of ALL messages created.  Then static_cast the
+//void* back into Message* in the main sketch.  Commented out because
+//it takes up a lot of memory.
+//static Vector<void*> full_msg_list;
 
 }
 //************************************************************************
@@ -100,11 +112,11 @@ namespace Position {
 	enum position{lt, rt, none};
 }
 
-namespace State {
+namespace Led_state {
 	//Used to define LED state
-    enum state{off = 0, on = 1};
+    enum led_state{off = 0, on = 1};
 	
-    inline const char* text(state s) {
+    inline const char* text(led_state s) {
       const char* res[4] = {(s == off) ? "off" : "on "};
       return res[0];
     }
@@ -134,35 +146,13 @@ namespace Port {
 }
 
 namespace Bump_state {
-    // Used in controller to set a bool value when the robot bumps into 
-    // something and is maneuvering to get clear again.
-	enum bs {clear, lt_bump, rt_bump};
-		
-	inline const char* text(bs s) {
-        const char* res;
-    
-        const char res0[4] = "clr";
-        const char res1[4] = "l_b";
-        const char res2[4] = "r_b";
-            
-        switch(s) {
-            case clear:
-                res = res0; 
-                break;
-            case lt_bump:
-                res = res1;
-                break;
-            case rt_bump:
-                res = res2;    
-                break;
-        }
-        return res;
-    }
+	//Used to return a value from a bumper
+	enum bump_state { clear = 0, pressed = 1};
 }
 
 namespace Danger_close_state {
-    // Used in controller to set a bool value when the robot bumps into 
-    // something and is maneuvering to get clear again.
+    // Used in controller to set a bool value when the robot is 
+	// within the danger close threshold and needs to react immediately
 	enum dc {clear, danger_close};
 	
 	inline const char* const text(dc d) {
@@ -171,9 +161,34 @@ namespace Danger_close_state {
     }
 }
 
+
 //Namespace Glow Worm
 namespace gw {
+
+//forward declaration
+class Message;
+
+//************************************************************************
+//*                         CLEARINGHOUSE
+//************************************************************************
+class Clearinghouse {
+public:
+	Clearinghouse();
+	
+	void register_msg(Message* msg);
+	
+	void list();
+	
+	void update(Message* msg);
+	
+	Message* get_ptr(const char* name);
+	
+	Message* get_ptr(const int msg_id);
 		
+private:
+	Vector<Message*> store;
+};
+
 //************************************************************************
 //*                         MESSAGE
 //************************************************************************
@@ -184,29 +199,30 @@ struct Message {
 	 * messages, but will settle on a strategy as I begin to figure
 	 * out the rest of the interface.
 	 *  
-	*/   
+	*/
 	static int msg_count;
 	int msg_id;
-
     const char* n;        //name
     
     Message(const char* name) :n(name) {
-    	msg_count++;
-		msg_id = msg_count;
-    }
+		//Uncomment to keep track of ALL messages created.
+		//gw::full_msg_list.push_back(this);
+
+		msg_count++;
+		msg_id = msg_count;	
+	}
     const char* name() const {return n;}
 	const int id() const {return msg_id;}
     
     virtual void print() {
 		Serial.print(id());
-		Serial.print("\t");
+		Serial.print(F("\t"));
 		Serial.println(name());
     };
 	
 	// Updates the message from data in the passed message
 	virtual void update(Message* msg) = 0;    
 };
-
 
 //************************************************************************
 //*                         NODE
@@ -225,9 +241,9 @@ public:
     
     virtual void print() {
 		Serial.print(id());
-		Serial.print("\t");
+		Serial.print(F("\t"));
 		Serial.print(name());
-		Serial.println("\tCustom print not implemented for this node");
+		Serial.println(F("\tCustom print not implemented for this node"));
     };
 	
 	virtual void begin() = 0;
@@ -235,33 +251,6 @@ public:
 private:
 	int node_id;
 	const char* n; 
-};
-
-//************************************************************************
-//*                         CLEARINGHOUSE
-//************************************************************************
-/*
-	TODO should clearinghouse keep track of how many nodes are in the 
- *       systm and what they are?
-*/
-class Clearinghouse {
-
-public:
-	Clearinghouse();
-	
-	void register_msg(Message* msg);
-	
-	void list();
-	
-	void update(Message* msg);
-	
-	Message* get_ptr(const char* name);
-	
-	Message* get_ptr(const int msg_id);
-		
-private:
-	Vector<Message*> store;
-
 };
 
 //************************************************************************
@@ -395,11 +384,68 @@ private:
 	MSG& nodes_msg;
 };
 
+//*******************************************************************
+//*                         Bumper
+//* Represents a physical bumper on the robot that grounds a digital
+//* pin when the bumper makes contact with an object.
+//*******************************************************************
+
+class Bumper {
+private: 
+	char* n;		//name
+	int bp;			//bumper pin
+	Position::position p;
+	bool test;		//in test mode or not
+
+	int one_in_x;
+	
+public:
+	//default name
+	Bumper(const int bumper_pin, Position::position pos, bool test_mode = false )
+	    : n("bumper"), bp(bumper_pin), p(pos),
+	    test(test_mode),
+		one_in_x(100)   //default to 1% chance in test mode
+		{ pinMode(bp, INPUT_PULLUP); }
+	
+	//named bumper
+	Bumper(char* name, const int bumper_pin, Position::position pos, bool test_mode = false )
+	    : n(name), bp(bumper_pin), p(pos),
+	    test(test_mode),
+		one_in_x(100)   //default to 1% chance in test mode
+		{ pinMode(bp, INPUT_PULLUP); }
+	
+	Bump_state::bump_state status() {
+		if(test) {
+			int odds = random (0, one_in_x);
+			return (odds == 1) ? Bump_state::pressed : Bump_state::clear; 
+		} else {
+			//recall that the pin grounds when pressed
+			byte res = digitalRead(bp);
+			return (res == HIGH) ? Bump_state::clear : Bump_state::pressed;
+		}
+	}	
+	//Test mode probability
+	int probability() const {return one_in_x;}
+	void set_probability(const int k) {one_in_x = k;}
+	
+	//read position
+	Position::position pos() const {return p;}
+	//get name
+	char* name() const { return n; }
+	
+	
+	void print() {
+	   Serial.print(F("{name:"));
+	   Serial.print(name());
+	   Serial.print(F(", pin:"));
+	   Serial.print(bp);
+	   Serial.println("}");
+   }
+};
 
 //*******************************************************************
 //*                         Motor_state
 //*******************************************************************
-
 struct Motor_state {
     Direction::dir d;
     int pwm;  
@@ -590,18 +636,18 @@ public:
 //*******************************************************************
 //*                         LED
 //* Led class allows me to declare an LED attached to the Arduino
-//* as an actuator that can you can push_back into a vector.
+//* as an object that can you can push_back into a vector.
 //*******************************************************************
 
 class Led {
     const char* n;      //name
     int p;              //pin the LED is attached to
-    State::state st;    //state of the LED either 'off' or 'on'
+    Led_state::led_state st;    //state of the LED either 'off' or 'on'
 	bool i2c;
     
 public:
     //Constructor for LED's attached directly to I/O pins
-	Led(const char* name, int pin, State::state s = State::off) 
+	Led(const char* name, int pin, Led_state::led_state s = Led_state::off) 
         :n(name), p(pin), st(s)
     {
         pinMode(p, OUTPUT);
@@ -609,7 +655,7 @@ public:
     }
 	
 	//Constructor for LED's attached via an I2C expander
-	Led(const char* name, Port::port pt, State::state s = State::off)
+	Led(const char* name, Port::port pt, Led_state::led_state s = Led_state::off)
 		:n(name), p(pt), st(s)
 	{
 		i2c = true;
@@ -623,23 +669,25 @@ public:
 		else return Port::error;
 	}
     
-    State::state state() { return st; }
-    void set_state( State::state cmd_state) { st = cmd_state; }
+    Led_state::led_state state() { return st; }
+    void set_state( Led_state::led_state cmd_state) { st = cmd_state; }
 
 	void print() {
 		if(i2c) 
 			Serial.print(F("I2C "));
 		Serial.print(F("Led"));
 		if(i2c) {
-			Serial.print(F(" connected on port: 0x"));
+			Serial.print(F(" connected on port:0x"));
 			Serial.print(port(), HEX);
 		}
 		else {
-			Serial.print(F(" connected on pin: "));
+			Serial.print(F(" connected on pin:"));
 			Serial.print(pin());			
 		}
-		Serial.print(F(" state: "));
-		Serial.println(text(state()));
+		Serial.print(F(" state:"));
+		Serial.print(text(state()));
+		Serial.print(F(" name:"));
+		Serial.println(name());
 	}
 };
 
@@ -673,9 +721,11 @@ inline bool operator!=(const Scan_pt& a, const Scan_pt& b ){
 }
 
 inline const char* text(const Scan_pt& sp) {
+	const char* end = NULL;
 	char buf[10];
-	sprintf(buf, "%03d:%03d", sp.first(), sp.second() );
-	return buf;
+	sprintf(buf, "%03d:%03d", (int)sp.heading(), (int)sp.range() );
+	Serial.print(buf);
+	return end;
 }
 
 //Define an error point to check for return values of Scan points out of range
@@ -764,13 +814,13 @@ template <typename T>
 inline
 void vector_print(const vector<T>& a) 
 {
-	Serial.print("{x:");
+	Serial.print(F("{x:"));
 	Serial.print(a.x,4);
-	Serial.print(", y:");
+	Serial.print(F(", y:"));
 	Serial.print(a.y,4);
-	Serial.print(", z:");
+	Serial.print(F(", z:"));
 	Serial.print(a.z,4);
-	Serial.println("}");
+	Serial.println(F("}"));
 }
 
 template <typename Ta, typename Tb, typename To> 
@@ -796,11 +846,11 @@ void vector_normalize(vector<int>* a) {
 	temp.y = (float)a->y;
 	temp.z = (float)a->z;
 	
-	Serial.print("before normalizing temp is: ");
+	Serial.print(F("before normalizing temp is: "));
 	vector_print(temp);	
 	vector_normalize(&temp);
 	
-	Serial.print("AFTER normalizing temp is: ");
+	Serial.print(F("AFTER normalizing temp is: "));
 	vector_print(temp);	
 	
 	a->x = (int)temp.x;

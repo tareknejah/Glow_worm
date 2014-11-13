@@ -1,5 +1,5 @@
-#ifndef CONTROL_EFFORT_H
-#define CONTROL_EFFORT_H OCT_2014
+#ifndef pos_h
+#define pos_h
 
 #include <arduino.h>
 #include <clearinghouse.h>
@@ -7,26 +7,32 @@
 #define INCLUDE_PRINT 1
 
 //************************************************************************
-//*                         CONTROL_EFFORT MESSAGE
+//*                         position MESSAGE
+//* pos.h is intended as the feedback message
+//* from a loop.
 //************************************************************************
 
 using namespace gw;
 
-struct Control_effort_msg : public Message {
+struct pos_msg : public Message {
 	// Data available from base class
 	//      const char* name()
 	//      int id()
 	
-	long u;
+	double distance_x;
+	double distance_y;
+	Time timestamp;
     
     //minimal constructor
-    Control_effort_msg() : Message("cont_eff"), 
-		u(0) {}
+    pos_msg() : Message("pos"), 
+		distance_x(0), distance_y(0), timestamp(0) {}
 	
 	//REQUIRED VIRTUAL VOID FROM BASE
 	void update(Message* msg) {
-		Control_effort_msg* ptr = static_cast<Control_effort_msg*>(msg);
-		u = ptr->u;
+		pos_msg* ptr = static_cast<pos_msg*>(msg);
+		distance_x = ptr->distance_x;
+		distance_y = ptr->distance_y;
+		timestamp = ptr->timestamp;
 	}
 		
 	#if INCLUDE_PRINT == 1
@@ -36,13 +42,15 @@ struct Control_effort_msg : public Message {
 		Serial.print(id());
         Serial.print(F(",name:"));
 		Serial.print(name());
-		Serial.print(F(",U:"));
-		Serial.print(u);
+		Serial.print(F(",stamp:"));
+		Serial.print(timestamp);
+		Serial.print(F(",distance_x:"));
+		Serial.print(distance_x);
+		Serial.print(F(",distance_y:"));
+		Serial.print(distance_y);
         Serial.println(F("}"));
 	}
 	#endif
-		
 };
-
 
 #endif
