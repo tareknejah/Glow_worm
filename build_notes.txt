@@ -1,0 +1,41 @@
+Build_notes.txt
+  - This is collection of notes on architecture issues and compilation
+    requirements to get the Glow Worm framework to function in the 
+    Arduino build system.
+
+1.  Blocks extend the gw::Node class and are the primary building blocks
+    for autonomous systems under the Glow Worm Framework.  Most blocks
+    are a header only file that fully inlines the functionality of the 
+    block.
+
+2.  More advanced blocks like scanner.h require a .cpp file to implement
+    their functionality.  Unfortunately, the Arduino build system won't
+    find the .cpp file in the blocks subdirectory.  Therefore the 
+    .cpp files are located in the top level Glow_worm library folder.
+    Although this clutters the main library folder it is required for the
+    linker to find the function definitions.  The error messages associated
+    with this linker failure look something like the following:
+         .cpp.o: In function 'loop':
+	 undefined reference to 'Scanner_5pt::run()'
+	 
+3.	The use of const Cmd_velocity_msg's as control vectors results
+	in the compiler creating a temporary instance of the Message class
+	then discarding the temporary after it stores the constant Message
+	into flash memory.  This is what I think explains the higher than
+	expected counts of messages when ch.list() is run on bots like
+	whisker_bot.
+	
+4.	Sbl_bot is stuck because there seems to be too few free bytes of 
+	memory.  I've trimmed all the fat I can find in my own code, and now
+	I'm tyring to trim Wire.h.  I created a repo on the DAZL lab machine
+	in the Arduino program directory.  In this repo I've created a branch
+	that changes the wire buffer length from 32 to 16 bytes.  Hoping
+	this helps without breaking wire.
+	
+	Before the Wire change the sbl_bot.ino sketch took 20,374 : 1688.
+	After it took 20,374 : 1608
+
+5.	After reducing the size of the buffer in HardwareSerial.h the build
+	numbers are:
+		Before - 20790 : 1626
+		After  - 20782 : 1562

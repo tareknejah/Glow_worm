@@ -1,5 +1,5 @@
-#ifndef CONTROL_EFFORT_H
-#define CONTROL_EFFORT_H OCT_2014
+#ifndef ERROR_H
+#define ERROR_H OCT_2014
 
 #include <arduino.h>
 #include <clearinghouse.h>
@@ -7,26 +7,28 @@
 #define INCLUDE_PRINT 1
 
 //************************************************************************
-//*                         CONTROL_EFFORT MESSAGE
+//*                         ERROR MESSAGE
 //************************************************************************
 
 using namespace gw;
 
-struct Control_effort_msg : public Message {
+struct Error_msg : public Message {
 	// Data available from base class
 	//      const char* name()
 	//      int id()
 	
-	long u;
+	double epsilon;
+	Time timestamp;
     
     //minimal constructor
-    Control_effort_msg() : Message("cont_eff"), 
-		u(0) {}
+    Error_msg() : Message("error"), 
+		epsilon(0), timestamp(0) {}
 	
 	//REQUIRED VIRTUAL VOID FROM BASE
 	void update(Message* msg) {
-		Control_effort_msg* ptr = static_cast<Control_effort_msg*>(msg);
-		u = ptr->u;
+		Error_msg* ptr = static_cast<Error_msg*>(msg);
+		epsilon = ptr->epsilon;
+		timestamp = ptr->timestamp;
 	}
 		
 	#if INCLUDE_PRINT == 1
@@ -36,13 +38,13 @@ struct Control_effort_msg : public Message {
 		Serial.print(id());
         Serial.print(F(",name:"));
 		Serial.print(name());
-		Serial.print(F(",U:"));
-		Serial.print(u);
+		Serial.print(F(",stamp:"));
+		Serial.print(timestamp);
+		Serial.print(F(",epsilon:"));
+		Serial.print(epsilon);
         Serial.println(F("}"));
 	}
-	#endif
-		
+	#endif		
 };
-
 
 #endif
